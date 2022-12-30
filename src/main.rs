@@ -5,7 +5,6 @@ use axum::{
     routing::get,
     Router,
 };
-use rand::Rng;
 use serde::Deserialize;
 use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -19,9 +18,6 @@ async fn main() {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-
-    let mut secret = [0u8; 128];
-    rand::thread_rng().fill(&mut secret);
 
     let app = Router::new().route("/", get(show_form).post(accept_form));
 
