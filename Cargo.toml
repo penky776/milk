@@ -8,8 +8,10 @@ edition = "2021"
 [dependencies]
 axum = { version = "0.6.1", features = ["ws", "headers"]}
 serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.0", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1.37"
+tokio = { version = "1.0", features = ["full"] } 
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 rust-argon2 = "1.0"
 http = "0.2.8"
+rand = "0.8.5"
+axum-sessions = "0.4.1"
