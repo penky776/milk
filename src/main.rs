@@ -1,42 +1,55 @@
 use argon2::{self, Config};
 use axum::{
     extract::Form,
-    response::{Html, IntoResponse},
+    headers::Cookie,
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
+    Router, TypedHeader,
 };
-use axum_sessions::{
-    async_session::MemoryStore,
-    extractors::{ReadableSession, WritableSession},
-    SessionLayer,
-};
-use rand::Rng;
+use http::header::{LOCATION, SET_COOKIE};
+use http_body::Empty;
 use serde::Deserialize;
-use std::net::SocketAddr;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::{error::Error, fmt, net::SocketAddr};
+
+#[derive(Debug)]
+struct Unauthenticated {
+    details: String,
+}
+impl Unauthenticated {
+    fn new(msg: &str) -> Unauthenticated {
+        Unauthenticated {
+            details: msg.to_string(),
+        }
+    }
+}
+impl fmt::Display for Unauthenticated {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+impl Error for Unauthenticated {
+    fn description(&self) -> &str {
+        &self.details
+    }
+}
+impl IntoResponse for Unauthenticated {
+    fn into_response(self) -> Response {
+        Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(axum::body::boxed(String::from("unauthorized")))
+            .unwrap()
+    }
+}
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "example_form=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    let store = MemoryStore::new();
-    let mut secret = [0u8; 128];
-    rand::thread_rng().fill(&mut secret);
-    let session_layer = SessionLayer::new(store, &secret).with_cookie_name("session");
-
     let app = Router::new()
-        .route("/", get(show_form).post(authenticate))
-        .route("/redirect.html", get(redirect))
-        .layer(session_layer);
+        .nest_service("/", get(show_form).post(authenticate))
+        .route("/authenticated", get(is_authenticated));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    tracing::debug!("listening on {}", addr);
+
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -44,7 +57,16 @@ async fn main() {
 }
 
 async fn show_form() -> Html<&'static str> {
-    Html(std::include_str!("../login.html"))
+    Html(std::include_str!("../assets/login.html"))
+}
+
+async fn is_authenticated(TypedHeader(cookie): TypedHeader<Cookie>) -> Result<(), Unauthenticated> {
+    let cookie = cookie.get("authenticated").unwrap();
+    if cookie != "yes" {
+        Err(Unauthenticated::new("unauthenticated"))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -53,7 +75,7 @@ struct Input {
     password: String,
 }
 
-async fn authenticate(mut session: WritableSession, Form(input): Form<Input>) -> impl IntoResponse {
+async fn authenticate(Form(input): Form<Input>) -> impl IntoResponse {
     let password = b"test";
     let salt = b"D;%yL9TS:5PalS/d";
     let config = Config::default();
@@ -61,25 +83,17 @@ async fn authenticate(mut session: WritableSession, Form(input): Form<Input>) ->
     let matches = argon2::verify_encoded(&hash, input.password.as_bytes()).unwrap();
 
     match matches {
-        true => {
-            session
-                .insert("signed_in", true)
-                .expect("authentication error");
-            Html(std::include_str!("../home.html"))
-        }
-        false => {
-            session
-                .insert("signed_in", false)
-                .expect("authentication error");
-            Html(std::include_str!("../incorrect-password.html"))
-        }
-    }
-}
-
-async fn redirect(session: ReadableSession) -> impl IntoResponse {
-    if session.get::<bool>("signed_in").unwrap_or(false) {
-        Html(std::include_str!("../redirect.html"))
-    } else {
-        Html("You are not logged in")
+        true => Response::builder()
+            .status(StatusCode::SEE_OTHER)
+            .header(LOCATION, "/authenticated")
+            .header(SET_COOKIE, "authenticated=yes")
+            .body(Empty::new())
+            .unwrap(),
+        false => Response::builder()
+            .status(StatusCode::SEE_OTHER)
+            .header(LOCATION, "/authenticated")
+            .header(SET_COOKIE, "authenticated=no")
+            .body(Empty::new())
+            .unwrap(),
     }
 }
