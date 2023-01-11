@@ -1,8 +1,9 @@
 use argon2::{self, Config};
 use axum::{
+    body::{boxed, Body, BoxBody},
     extract::Form,
     headers::Cookie,
-    http::StatusCode,
+    http::{Request, StatusCode, Uri},
     response::{Html, IntoResponse, Response},
     routing::get,
     Router, TypedHeader,
@@ -11,11 +12,14 @@ use http::header::{LOCATION, SET_COOKIE};
 use http_body::Empty;
 use serde::Deserialize;
 use std::{error::Error, fmt, net::SocketAddr};
+use tower::ServiceExt;
+use tower_http::services::ServeDir;
 
 #[derive(Debug)]
 struct Unauthenticated {
     details: String,
 }
+
 impl Unauthenticated {
     fn new(msg: &str) -> Unauthenticated {
         Unauthenticated {
@@ -23,16 +27,19 @@ impl Unauthenticated {
         }
     }
 }
+
 impl fmt::Display for Unauthenticated {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.details)
     }
 }
+
 impl Error for Unauthenticated {
     fn description(&self) -> &str {
         &self.details
     }
 }
+
 impl IntoResponse for Unauthenticated {
     fn into_response(self) -> Response {
         Response::builder()
@@ -45,8 +52,8 @@ impl IntoResponse for Unauthenticated {
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .nest_service("/", get(show_form).post(authenticate))
-        .route("/authenticated", get(is_authenticated));
+        .route("/", get(show_form).post(authenticate))
+        .nest_service("/authenticated", get(is_authenticated));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
@@ -60,12 +67,22 @@ async fn show_form() -> Html<&'static str> {
     Html(std::include_str!("../assets/login.html"))
 }
 
-async fn is_authenticated(TypedHeader(cookie): TypedHeader<Cookie>) -> Result<(), Unauthenticated> {
+async fn is_authenticated(
+    uri: Uri,
+    TypedHeader(cookie): TypedHeader<Cookie>,
+) -> Result<Response<BoxBody>, Unauthenticated> {
+    let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let service = ServeDir::new("assets/authenticated");
+
     let cookie = cookie.get("authenticated").unwrap();
+
     if cookie != "yes" {
         Err(Unauthenticated::new("unauthenticated"))
     } else {
-        Ok(())
+        match service.oneshot(request).await {
+            Ok(res) => Ok(res.map(boxed)),
+            Err(_) => Err(Unauthenticated::new("Something went wrong...")),
+        }
     }
 }
 
