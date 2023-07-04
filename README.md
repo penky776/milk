@@ -1,2 +1,1 @@
-
-made with axum
+A sort-of template i want to use for other projects
